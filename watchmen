@@ -1,0 +1,37 @@
+#!/usr/bin/env ruby
+require 'bundler'
+require 'faraday'
+require 'json'
+require 'uri'
+
+token = ENV['GITHUB_ACCESS_TOKEN'] || raise(ArgumentError.new("GITHUB_ACCESS_TOKEN env is required."))
+
+lockfile = Bundler::LockfileParser.new(File.read('Gemfile.lock'))
+lockfile.specs.each do |spec|
+  if spec.source.is_a?(Bundler::Source::Rubygems)
+    data = JSON.parse(Faraday.get("https://rubygems.org/api/v1/gems/#{spec.name}.json").body)
+    keys = data.keys.grep(/ur[il]/i)
+    values = keys.map{|k| data[k]}.map(&:to_s)
+    value = values.detect{|v| v.match(/github\.com/)}
+    if value.to_s.match(/\Ahttps?:/)
+      uri = URI.parse(value)
+      repo_full_name = uri.path.sub(%r!\A/!, '')
+      conn = Faraday.new("https://api.github.com/")
+      res = conn.put do |req|
+        req.url "/repos/#{repo_full_name}/subscription"
+        req.headers['Content-Type'] = 'application/json'
+        req.headers['Authorization'] = "token #{token}"
+        req.body = {subscribed: true}.to_json
+      end
+      if res.status == 200
+        puts "Watching https://github.com/#{repo_full_name}"
+      else
+        warn "Cannot watch https://github.com/#{repo_full_name} (reason: rejected by GitHub API)"
+      end
+    else
+      warn "Cannot watch #{spec.name} (reason: no GitHub URL found)"
+    end
+  else
+    warn "Cannot watch #{spec.name} (reason: not hosted on Rubygems.org)"
+  end
+end
